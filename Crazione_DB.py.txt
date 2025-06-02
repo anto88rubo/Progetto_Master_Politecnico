@@ -1,0 +1,372 @@
+# -*- coding: utf-8 -*-
+"""
+
+"""
+import pandas as pd
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+from matplotlib import pyplot
+from sklearn.preprocessing import StandardScaler,LabelEncoder,OneHotEncoder
+import numpy as np
+
+dati=pd.read_excel("C:\\Users\\U374080\\Desktop\\DATA ANALYTICS\\MASTER POLIMI\\import\\database.xlsx")
+
+
+#asssegna_grandezza_azienda
+
+def dimensione(x):
+        if pd.isna(x):
+            return x
+        elif x<1000000:
+            return "1 MILION"
+        
+        elif 1000000<=x<200000000:
+            return "1MILION-200 MILION"
+        
+        elif 200000000<=x<1000000000:
+            return "200 MILION-1 BILION" 
+        
+        elif 1000000000<=x<5000000000:
+            return "1 BILION-5 BILION" 
+        
+        elif 5000000000<=x<10000000000:
+            return "5 BILION-10 BILION"    
+ 
+        elif 10000000000<=x<25000000000:
+            return "10 BILION-25 BILION" 
+        
+        elif 25000000000<=x<50000000000:
+            return "25 BILION-50 BILION"
+        
+        elif 50000000000<=x<100000000000:
+            return "50 BILION-100 BILION"
+        
+        elif 100000000000<=x<250000000000:
+            return "100 BILION-250 BILION"
+        
+        elif x>250000000000:
+            return "MORE 250 BILION"
+
+            
+dati["dimensione"]= dati["Revenue"].apply(dimensione)
+
+
+
+
+materie_prime=pd.read_excel("C:\\Users\\U374080\\Desktop\\DATA ANALYTICS\\MASTER POLIMI\\MATERIE PRIME.xlsx")
+materie_prime=pd.DataFrame(materie_prime[["Year","Crude oil, average","Natural gas, US","Natural gas, Europe","Gold"]])
+               
+DATI_TOTALI_ECONOMIA=pd.read_excel("C:\\Users\\U374080\\Desktop\\DATA ANALYTICS\\MASTER POLIMI\\import\\DATI_TOTALI_INT.xlsx", sheet_name="DEFINITIVO")
+
+DATI_TOTALI_ECONOMIA=pd.DataFrame(DATI_TOTALI_ECONOMIA[["chiave","PopulationPersons","PIL (dollari USA)","General government gross debtPercent of GDP","Disoccupazione","Inflation, GDP deflator (annual %)","Inflation, end of period consumer pricesPercent change","Final consumption expenditure (% of GDP)","Gross domestic savings (% of GDP)","Exports of goods and services (% of GDP)","Imports of goods and services (% of GDP)"]])
+
+CAMBI=pd.read_excel("C:\\Users\\U374080\\Desktop\\DATA ANALYTICS\\MASTER POLIMI\\import\\cambi.xlsx")
+
+INTERESSE=pd.read_excel("C:\\Users\\U374080\\Desktop\\DATA ANALYTICS\\MASTER POLIMI\\import\\tassi_interesse.xlsx")
+
+
+print(dati.columns)
+#ticker=["AMPF.MI","ENEI.MI","LDOF.MI","AAPL.OQ"]
+#dati=dati[dati["TICKER"].isin(ticker)]
+statistiche=dati.describe()
+dati=dati.dropna(subset=['Price Close']) #elimino righe dove non c'è il prezzo di chiusura, perchè non posso fare la previsione
+
+
+#dati=dati[['TICKER', 'COMPANY', 'SECTOR','COUNTRY','REVENUE','INCOME','Total Assets','Total Liabilities','Free Cash Flow',
+ #          'EBIT','EBITDA','EBT','Total Equity','CHIAVE','PIL','DEBITO','Unemployment rate','Inflation consumer prices','tasso SHORT','TASSO LOGN','Price']]
+
+
+def calculate_percentage_change_by_ticker_excluding(df, exclude_columns):
+
+    numeric_df = df.select_dtypes(include=['number']).drop(columns=exclude_columns, errors='ignore')
+    non_numeric_df = df.select_dtypes(exclude=['number'])
+    excluded_df = df[exclude_columns]
+ 
+
+    def calculate_pct_change(group):
+        prev=group.shift(-1)
+        with np.errstate(divide='ignore',invalid='ignore'):
+            var=(group-prev)/prev.abs()
+        var[(prev==0) | (prev.isna())]=0
+        return var
+   
+    """def calculate_pct_change(group):
+        return group.pct_change()
+    """
+    
+    pct_change_df = numeric_df.groupby(df['TICKER']).apply(calculate_pct_change)
+    pct_change_df = pct_change_df.reset_index(level='TICKER', drop=True)
+    pct_change_df = pct_change_df.sort_index()
+    result_df = pd.concat([non_numeric_df,excluded_df,pct_change_df], axis=1)
+    
+    return result_df
+
+
+def calculate_percentage_change_by_ticker_excluding_binary(df, exclude_columns):
+    """
+    Calcola la variazione percentuale per ticker, escludendo le colonne binarie,
+    normalizza i dati.
+
+    Args:
+        df (pd.DataFrame): Il DataFrame di input.
+        exclude_columns (list): Una lista di nomi di colonna da escludere dal calcolo
+            della variazione percentuale.
+
+    Returns:
+        pd.DataFrame: Un DataFrame con le variazioni percentuali calcolate
+            e normalizzate.
+    """
+    numeric_df = df.select_dtypes(include=['number']).drop(columns=exclude_columns, errors='ignore')
+    non_numeric_df = df.select_dtypes(exclude=['number'])
+    excluded_df = df[exclude_columns]
+
+    def calculate_pct_change(group):
+        return group.apply(lambda col: ((col-col.shift(-1))/col.shift(-1).abs()).fillna(0).replace([np.inf,-np.inf],0))
+        
+
+    # Usa una variabile temporanea e raggruppa per ticker e anno
+    pct_change_df= numeric_df.groupby([df['TICKER']]).apply(calculate_pct_change)
+    pct_change_df = pct_change_df.reset_index(level='TICKER', drop=False)
+    pct_change_df = pct_change_df.sort_index()
+
+    pct_change_df = pd.concat([non_numeric_df, excluded_df, pct_change_df], axis=1, join="inner")
+    pct_change_df = pct_change_df.replace([np.inf, -np.inf], 0)
+
+
+    """
+    # Normalizza il DataFrame nell'intervallo [-1, 1] per ogni ticker e anno
+    def scale_group(group):
+        numeric_df_1 = group.select_dtypes(include=[np.number]).drop(columns=exclude_columns, errors='ignore').columns
+        sc=StandardScaler()
+        group[numeric_df_1]=sc.fit_transform(group[numeric_df_1])
+        return group
+    """
+    
+    def assegnavalore(x):
+        if pd.isna(x):
+            return x
+        elif 0<x<0.05:
+            return 1
+        elif 0.05<=x<0.2:
+            return 2
+        elif 0.2<=x<0.5:
+            return 3
+        elif 0.5<=x<1:
+            return 4
+        elif x>1:
+            return 5
+        elif -0.05<=x<0:
+            return -1
+        elif -0.2<=x<-0.05:
+            return -2
+        elif -0.5<=x<-0.2:
+            return -3
+        elif -1<=x<-0.5:
+            return -4
+        elif x<-1:
+            return -5
+        elif x==0:
+            return 0
+
+            
+    numeric_df_1 = df.select_dtypes(include=['number']).drop(columns=exclude_columns, errors='ignore').columns
+    #non_numeric_df_1 = df.select_dtypes(exclude=['number'])
+    #excluded_df_1 = df[exclude_columns] 
+    
+    # Usa una variabile temporanea e raggruppa per ticker e anno
+    #pct_change_df= pct_change_df.groupby(df['TICKER'], group_keys=False).apply(scale_group)
+    pct_change_df[numeric_df_1]= pct_change_df[numeric_df_1].applymap(assegnavalore)
+
+    df_scaled=pct_change_df
+
+    return df_scaled
+    
+    """   
+    
+    pct_change_df = pct_change_df.applymap(lambda x:1 if x>0 else 0)
+    result_df = pd.concat([non_numeric_df,excluded_df,pct_change_df], axis=1)
+    
+    return result_df
+
+    """
+
+def assegnavalore_price(x):
+        if pd.isna(x):
+            return x
+        elif 0<x<0.05:
+            return 1
+        elif 0.05<=x<0.2:
+            return 2
+        elif 0.2<=x<0.5:
+            return 3
+        elif 0.5<=x<1:
+            return 4
+        elif x>1:
+            return 5
+        elif -0.05<=x<0:
+            return -1
+        elif -0.2<=x<-0.05:
+            return -2
+        elif -0.5<=x<-0.2:
+            return -3
+        elif -1<=x<-0.5:
+            return -4
+        elif x<-1:
+            return -5
+        elif x==0:
+            return 0   
+
+dati['Prezzo_Iniziale']=dati["Price Close"]
+dati['Prezzo_Finale'] = dati.groupby('TICKER')['Price Close'].shift(1)
+#dati['Variazione'] = dati.groupby('TICKER')['Prezzo_Finale'].pct_change(-1).apply(lambda x:1 if x>0 else 0)
+dati['Variazione'] = dati.groupby('TICKER')['Prezzo_Finale'].pct_change(-1)
+dati['Variazione']= dati['Variazione'].apply(assegnavalore_price)
+
+dati['Prezzo_Percentuale'] = dati.groupby('TICKER')['Prezzo_Finale'].pct_change(-1)
+dati.drop(columns="Price Close", inplace=True)
+
+#dati=dati.dropna()
+#dati=dati.dropna(subset=["Revenue"]) 
+dati=dati[dati['Revenue']!=0] #se ho revenue variazione percentuale vuoto vuol dire che sono INIZIO serie
+#dati=dati.fillna(0)
+
+
+#dati=pd.merge(dati,materie_prime, on="Year")
+
+dati["chiave"]=dati["COUNTRY"]+dati["Year"].astype(str)
+#DATI_TOTALI_ECONOMIA["chiave"]=DATI_TOTALI_ECONOMIA["Paese"]+DATI_TOTALI_ECONOMIA["Anno"].astype(str)
+
+dati=pd.merge(dati,DATI_TOTALI_ECONOMIA, on="chiave", how="left")
+
+dati=pd.merge(dati,INTERESSE, on="chiave", how="left")
+dati=pd.merge(dati,materie_prime, on="Year")
+
+
+dati=pd.merge(dati,CAMBI, on="chiave")
+
+dati_pre_var=dati
+dati.to_excel("C:\\Users\\U374080\\Desktop\\DATA ANALYTICS\\MASTER POLIMI\\import\\database_prevar.xlsx", float_format="%.5f")
+
+"""
+#verifico se tornano i calcoli
+prova=dati
+act=prova["tasso_breve"].shift(0)
+prev=prova["tasso_breve"].shift(-1)
+with np.errstate(divide='ignore',invalid='ignore'):
+ prova['dati_test']=(act-prev)/prev.abs()
+"""
+
+
+
+columns_to_exclude = ['Prezzo_Finale', 'Variazione', 'Prezzo_Percentuale','Prezzo_Iniziale','Year','Share']
+
+dati2 = calculate_percentage_change_by_ticker_excluding(dati.copy(), columns_to_exclude)
+dati3 = calculate_percentage_change_by_ticker_excluding_binary(dati.copy(), columns_to_exclude)
+
+
+
+
+#dati2=dati2.dropna()
+
+dati2['ID'] = dati2.index
+dati2 = dati2.set_index('ID')
+
+dati3=dati3[dati3.apply(lambda row: (row==0).sum()<10, axis=1)]
+dati3=dati3.fillna(0)
+dati3=dati3[dati3['Revenue']!=0] #
+dati3=dati3[dati3['Prezzo_Finale']!=0] #elimino le prime righe
+
+
+dati2=dati2[dati2.apply(lambda row: (row==0).sum()<10, axis=1)]
+dati2=dati2.fillna(0)
+dati2=dati2[dati2['Prezzo_Finale']!=0] #
+
+
+dati3=dati3.drop(columns=["Unnamed: 0","Unnamed: 0_x","Unnamed: 0_y","Share"])
+#dati3.drop(dati3.columns[0], axis=1, inplace=True)
+
+
+#AGGIUNGO IL LAG anno precedente
+def add_lag_variables(df,group_col,year_col, lags=[1]):
+    df=df.sort_values([group_col, year_col])
+    values_cols=df.select_dtypes(include='number').columns.drop(year_col, errors='ignore')
+    lagged_frames=[]
+    for lag in lags:
+     lagged=df.groupby(group_col)[values_cols].shift(lag)
+     lagged.columns=[f"{col}_lag{lag}" for col in lagged.columns]
+     lagged_frames.append(lagged)
+    return pd.concat([df]+lagged_frames, axis=1)
+
+
+
+#df_lag=add_lag_variables(dati3, group_col='COMPANY', year_col='Year', lag=1)
+dati3=add_lag_variables(dati3, group_col='COMPANY', year_col='Year', lags=[1])
+
+#converti le colonne di settore e country 
+dati_pre_ohe=dati3
+cols_to_encode=["COUNTRY","SECTOR","dimensione"]
+ohe=OneHotEncoder(sparse=False, drop='first')
+encoded_cols=ohe.fit_transform(dati3[cols_to_encode])
+encoded_df=pd.DataFrame(encoded_cols, columns=ohe.get_feature_names_out(cols_to_encode))
+dati3=pd.concat([dati3,encoded_df], axis=1)
+dati3=dati3.fillna(0)
+dati_pre_ohe=dati_pre_ohe.fillna(0)      
+               
+
+dati3 = dati3.reset_index(drop=True)
+dati3=dati3[dati3["TICKER"]!=0]
+
+dati3.to_excel("C:\\Users\\U374080\\Desktop\\DATA ANALYTICS\\MASTER POLIMI\\import\\database_pulitov2_binario.xlsx", float_format="%.5f")
+dati2.to_excel("C:\\Users\\U374080\\Desktop\\DATA ANALYTICS\\MASTER POLIMI\\import\\database_pulitov2.xlsx", float_format="%.5f")
+dati_pre_ohe.to_excel("C:\\Users\\U374080\\Desktop\\DATA ANALYTICS\\MASTER POLIMI\\import\\database_preoh.xlsx", float_format="%.5f")
+
+
+dati=dati2.drop_duplicates(subset=["TICKER"])
+
+grouped_distinct_counts = dati.groupby(['COUNTRY'])['TICKER'].size().sort_values(ascending=False)
+print(grouped_distinct_counts)
+
+grouped_distinct_counts = dati.groupby(['SECTOR'])['TICKER'].size().sort_values(ascending=False)
+print(grouped_distinct_counts)
+
+
+
+import matplotlib.pyplot as plt
+import pandas as pd
+
+# Assumendo che il tuo DataFrame si chiami 'dati' e abbia le colonne 'NATION' e 'SECTOR'
+
+# 1. Conteggio delle aziende per nazione
+nation_counts = dati['COUNTRY'].value_counts()
+
+# 2. Creazione del grafico per nazione con griglia orizzontale e verticale
+plt.figure(figsize=(10, 6))
+plt.bar(nation_counts.index, nation_counts.values)
+plt.xlabel("Nazione")
+plt.ylabel("Numero di Aziende")
+plt.title("Numero di Aziende per Nazione")
+plt.xticks(rotation=90, ha='right')
+plt.grid(axis='y', linestyle='--')  # Griglia orizzontale
+plt.grid(axis='x', linestyle='--')  # Griglia verticale
+plt.tight_layout()
+plt.show()
+
+# 3. Conteggio delle aziende per settore
+sector_counts = dati['SECTOR'].value_counts()
+
+# 4. Creazione del grafico per settore con griglia orizzontale e verticale
+plt.figure(figsize=(10, 6))
+plt.bar(sector_counts.index, sector_counts.values)
+plt.xlabel("Settore")
+plt.ylabel("Numero di Aziende")
+plt.title("Numero di Aziende per Settore")
+plt.xticks(rotation=90, ha='right')
+plt.grid(axis='y', linestyle='--')  # Griglia orizzontale
+plt.grid(axis='x', linestyle='--')  # Griglia verticale
+plt.tight_layout()
+plt.show()
+
+
+
+
